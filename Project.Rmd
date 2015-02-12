@@ -1,0 +1,194 @@
+---
+title: "Practical ML Peer Assessment - Workout Prediction"
+author: "R.Marrese"
+date: "12/2/2015"
+output: html_document
+---
+***
+```{r,echo=FALSE}
+library(knitr);library(ggplot2)
+knit_hooks$set(inline = function(x) {
+    if (is.numeric(x)) knitr:::format_sci(x, 'latex') else x
+ })
+```
+
+## 1. Executive Summary
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior. This is part of Coursera MOOC course on Machine Learning (tought by JHU).
+The goal of this report is to create a machine-learning algorithm that can correctly identify the quality of barbell bicep curls by using data from belt, forearm, arm, and dumbbell monitors. There are five classifications of this exercise, only one method is the correct form of the exercise, while the other four are common mistakes: 
+* Class A - exactly according to the specification
+* Class B - throwing the elbows to the front
+* Class C - lifting the dumbbell only halfway
+* Class D - lowering the dumbbell only halfway
+* Class E - throwing the hips to the front.
+
+More information is available from the website here: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset).
+
+The data is collected from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. The outcome variable has five classes and the total number of predictors are 159.
+The project has followed this steps:
+* loading datasets from URL to a working directory
+* simplify datasets (reducing number of predictors - from 159 to 53 and deleting useless data)
+* divide training observation in 2 parts: `testing` and `crossvalidation`
+* choose the adeguate model (random forest has been selected)
+* testing the model oucome on the `testing` dataset
+* evaluate model accuracy
+* predict model outcome on real testing data (subsequent Project submission)
+
+## 2. Libraries
+The report is generated in`R by Rstudio Version 0.98.945` running on a server.
+The following libraries were used throughout the code.
+
+```{r,echo=TRUE, eval=TRUE}
+library(caret)
+library(kernlab)
+library(randomForest)
+library(corrplot)
+library(ggplot2)
+```
+
+## 3. Data Loading and Preprocessing
+### 3.1 Loading datasets
+
+```{r,echo=F, eval=T}
+#loading data into working directory
+# check if a data folder exists; if not then create one
+if (!file.exists("data")) {dir.create("data")}
+# file URL and destination file
+fileUrl1 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+destfile1 <- "./data/pml-training.csv"
+fileUrl2 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+destfile2 <- "./data/pml-testing.csv"
+# download the file and note the time
+download.file(fileUrl1, destfile = destfile1, method="curl")
+download.file(fileUrl2, destfile = destfile2, method="curl")
+dateDownloaded <- date()
+# read the csv file for training
+training_raw <- read.csv("./data/pml-training.csv", na.strings= c("NA",""," "))
+```
+Two csv files (`training` and `test`)  were downloaded  on `r dateDownloaded` into data folder called `data` in the current working directory.
+
+### 3.2. Preprocessing
+The original `training` dataset contains `r nrow(training_raw)` rows and `r ncol(training_raw)` columns. Prior to choose the prediction model, it seems that some preprocessing (i.e. simplifying/reducing dimension of dataset without affecting the prediction capability) is necessary.
+```{r}
+# clean the data by removing columns with NAs etc
+NA_values <- apply(training_raw, 2, function(x) {sum(is.na(x))})
+training_raw2 <- training_raw[,which(NA_values == 0), ]
+# remove identifier columns such as name, timestamps, etc
+training <- training_raw2[,8:length(training_raw2)]
+rm(list=(c("training_raw","training_raw2"))) #remove useless dataframe to free space
+```
+
+The dataset `training` now contains a little as  `r ncol(training)` columns and is ready to be submitted to a model.
+
+## 4. Data splitting
+The test data set was split up into training and cross validation sets in a 70:30 ratio in order to train the model.
+```{r}
+# split the cleaned testing data into training and cross validation
+index <- createDataPartition(y = training$classe, p = 0.7, list = FALSE)
+training <- training[index, ]
+crossval <- training[-index, ]
+```
+A correlatin matrix is then generated in order to have a picture of relationship between variables.
+```{r}
+# plot a correlation matrix
+correlMatrix <- cor(training[, -length(training)]) #produce correlation matrix except variable classe 
+corrplot(correlMatrix, order = "FPC", method = "circle", type = "lower", tl.cex = 0.8, tl.col = rgb(0, 0, 0)) #plot correlation
+```
+
+The darker the colour the stronger is the relation. As we can see the majority of matrix element are in ligth colour, leaving only a very few strong relation.
+
+```{r,echo=FALSE}
+# fit a model to predict the classe using everything else as a predictor
+rm(list=(c("inTrain"))) #remove useless dataframe to free space
+```
+
+## 5. Running the prediction model
+### 5.1 Model Selection
+Having a quick look on dataset it seems that data are complex to the goal of grouping process so that a discrete rpart model may not yeld required accuracy. Following plots could explain the concept. 
+
+```{r,echo=FALSE}
+p1<-qplot(total_accel_belt,roll_dumbbell,colour=classe,data=training)
+p2<-qplot(roll_arm,yaw_arm,colour=classe,data=training)
+grid.arrange(p1,p2, ncol=2)
+```
+
+For this reason it has been decided to run a _random forest_ algorithm, which seems more appropriate to the data structure.
+
+### 5.2 Model execution
+
+The model run on the predicted variable `classe` taking other variables as predictors.
+```{r}
+model <- randomForest(classe ~ ., data = training)
+model
+```
+The model produced a very small OOB error rate of .49%. This is considered satisfactory to proceed to the testing phase.
+
+## 6. Crossvalidation
+### 6.1 Predictor importance
+
+```{r}
+imp <- varImp(model)
+modplot <- as.data.frame(cbind(predictor=row.names(imp),importance=imp[order(imp, decreasing=TRUE),])) #sort predictor
+modplot$importance <- as.numeric(modplot$importance)
+#head(modplot,20) #print top 20 predictors
+modplot$predictor <- factor(modplot$predictor, as.character(modplot$predictor))
+modplot$predictor <- reorder(modplot$predictor, modplot$importance)
+qplot(importance, predictor, data=modplot[1:20,], xlab="Mean decreasing Accuracy") #plot top 20 predictors
+```
+
+### 6.2 Crossvalidation
+
+We used holdout data split method (instead proper cross validation). A classification of the remaining 30% of data (`crossval` dataset) has been carried out using the model. The results were placed in a confusion matrix along with the actual classifications in order to determine the accuracy of the model.
+
+```{r,echo=FALSE}
+# crossvalidate the model using the remaining 30% of data
+predictCrossVal <- predict(model, crossval)
+confusionMatrix(crossval$classe, predictCrossVal)
+```
+
+This model yielded a 100% prediction accuracy, with 100% Sensitivity and Specificity, so this model proved very robust and adeguate to predict new data.
+
+### 6.3 Insample and OutOfSample estimation
+```{r}
+## calculate OutOfSample estimation
+trainFull <- rbind(training,crossval)
+pred <- predict(model, trainFull)
+outOfSampleAcc <- sum(pred == trainFull$classe)/length(pred)
+paste0("Out of Sample Accuracy ", round(outOfSampleAcc,digits=2),"%")
+paste0("Out of sample error estimation: ", round(((1-outOfSampleAcc)*100), digits=2), "%")
+rm(trainFull)
+```
+In sample error rate is 0% (1-Accuracy). Luckily the same is for Out Of Sample error estimation. Obvoulsy the Testing error rate would be grater than estimation, but stating previous results, there is not much concern about it.
+
+## 7.Prediction process
+### 7.1 Preprocess test dataset
+So we applied the same cleaning treatment to the final testing data `test`, producing the same predictor of training dataset.
+```{r,echo=FALSE}
+test_raw <- read.csv("./data/pml-testing.csv", na.strings= c("NA",""," "))
+NA_values <- apply(test_raw, 2, function(x) {sum(is.na(x))})
+test_raw2 <- test_raw[,which(NA_values == 0)]
+test <- test_raw2[8:length(test_raw2)]
+rm(list=(c("test_raw","testraw2",NA_values))) #remove useless dataframe to free space
+```
+
+### 7.2 Prediction
+The model was finally used to predict the classifications of the 20 results of data contained in loaded/preprocessed `test` dataset.
+```{r,echo=FALSE}
+# predict the classes of the test set
+predictTest <- predict(model, test)
+predictTest
+```
+For subsequent purposes (project submission) 20 text file has been generated as a set of prediction.
+
+```{r,echo=FALSE,eval=TRUE}
+write_files <- function(x) {
+  n <- length(x)
+  for (i in 1:n) {
+    filename <- paste0("problem_id", i, ".txt")
+    write.table(x[i], file=filename, quote=FALSE, row.names=FALSE,col.names=FALSE)
+  }
+}
+write_files(predictTest)
+```
+## 8. Conclusion
+It became apparent that with information made available by measuring instrument it is possible to accurately predict the correctedness of performing exercise using a simple model driven by a few predictor.
+
